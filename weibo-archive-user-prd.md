@@ -170,7 +170,7 @@ When a risk signal is detected:
 
 - record the failure in `manifest.json` if possible;
 - print a concise warning;
-- exit with code `1`;
+- exit with code `3`;
 - do not continue paging or downloading media.
 
 ### Transient Failures
@@ -336,7 +336,7 @@ If `isLongText` is true but the detail response does not inline a complete `long
 https://weibo.com/ajax/statuses/longtext?id=<MBLOG_ID>
 ```
 
-This was not needed for the validated cases, but is required for posts where inlining is incomplete; otherwise the archive silently stores truncated text.
+This endpoint was live-verified working for `R4PzTtZSd` and `R3TUQtV4s` (HTTP 200, `ok: 1`) with a logged-in cookie and `Referer: https://weibo.com/`; it returns `{"ok":1,"data":{"longTextContent":"…"}}` — note the content lives at `data.longTextContent`, a different shape from the detail endpoint's inline `longText.content`. Use it when the inlined content is incomplete; otherwise the archive silently stores truncated text.
 
 ## Markdown Output
 
@@ -419,8 +419,9 @@ Record failures in `manifest.json` with:
 Exit codes:
 
 - `0`: all matched posts succeeded (also for a `--dry-run` that completed without failures).
-- `1`: fatal — missing cookie, invalid or inverted dates, auth failure, unreadable API response, **or a risk signal detected during the run** (HTTP `403`/`418`/`429`, Sina Visitor System, login page, captcha). A risk signal exits `1` even if some posts were already saved, to signal that the account/session may be flagged and the run should not be trusted as complete.
-- `2`: the run completed or was stopped after partial work, with one or more post/image failures or a transient-failure stop, but no risk signal.
+- `1`: fatal setup/configuration error — missing `WEIBO_COOKIE`, invalid or inverted `--from`/`--to`, or an unreadable/malformed API response that is not a recognized risk signal. No useful crawl work was completed.
+- `2`: the run completed or was stopped after partial work, with one or more post/image failures or a transient-failure stop, but no risk signal. "Partial work" means at least one post directory was created or updated during the run; timeline-only discovery progress does not count.
+- `3`: a risk signal was detected during the run (HTTP `403`/`418`/`429`, a non-JSON Sina Visitor System response, a login page where JSON was expected, captcha/verification wording, or a JSON-level signal such as a negative `ok` value or a rate-limit message). Exit `3` even if some posts were already saved, to signal that the account/session may be flagged and the run should not be trusted as complete. Stop immediately; do not continue paging or downloading media.
 
 For partial image failures:
 
@@ -568,7 +569,7 @@ This validates that `SEQ` is per day and that the hour component remains useful 
 
 Revised 2026-06-19 after a design review. Substantive changes:
 
-- Resolved an exit-code contradiction: risk signals are a distinct fatal case (exit `1`) and the legend now states partial work may already exist.
+- Split exit codes: risk signals now exit `3`, distinct from setup errors at exit `1` and partial-work stops at exit `2`, so unattended tooling can tell a flagged session from a config error. Added the JSON-level risk signals (negative `ok` / rate-limit message) and a definition of "partial work".
 - The script now lives under `src/` so `biome`, `tsconfig`, and the `@/*` alias cover it. Note: the invocation path in `weibo-cookie-tutorial.md` still reads `weibo-archive-user.ts` and should be updated to `src/weibo-archive-user.ts` to match.
 - Added a `.gitignore` requirement covering `WEIBO_COOKIE.txt`, `weibo-archive/`, and logs.
 - Added explicit `created_at` parsing guidance (do not rely on `new Date()`; verify under Bun/JavaScriptCore).
