@@ -39,6 +39,8 @@ Optional options:
 - `--delay-ms <ms>`: fixed delay between API/detail/image requests. If omitted, use a random delay between `1000` and `5000` ms before each request.
 - `--max-pages <n>`: safety cap for timeline paging.
 - `--max-posts-per-run <n>`: maximum number of posts to download or refresh in one run, default `50`.
+- `--max-retries <n>`: maximum retries on a transient failure (timeout, socket reset, HTTP `5xx`) before the run stops. Default `2`.
+- `--retry-base-ms <ms>`: base delay for exponential backoff between retries; attempt `k` waits `retry-base-ms * 2^(k-1)`. Default `60000`.
 - `--dry-run`: list matched post URLs without downloading payloads or media.
 
 ## Authentication
@@ -110,7 +112,7 @@ https://weibo.com/<UID>/<MBLOG_ID>
 
 Send browser-like headers on every request so the desktop `/ajax/` endpoints and the image CDN respond correctly:
 
-- `User-Agent`: a desktop Chrome User-Agent string (fixed; do not rotate).
+- `User-Agent`: a desktop Chrome User-Agent string. Keep it fixed within a run (do not rotate per request), but refresh it periodically to a current Chrome stable string (e.g. bump the tracked constant every few months) so it does not become a static long-term fingerprint.
 - `cookie`: the value of `WEIBO_COOKIE`.
 - `Accept: application/json` for `/ajax/` JSON requests.
 - For image downloads from `*.sinaimg.cn`: include `Referer: https://weibo.com/` (and the same `cookie`). Some variants/accounts return `403` without a Weibo `Referer`.
@@ -154,7 +156,7 @@ Rules:
   - phase 1: timeline discovery and filtering;
   - phase 2: detail/image/Markdown download for selected posts.
 - Recommend `--dry-run` before a real download, especially for new users, wide date windows, or changed filters.
-- Do not rotate cookies, proxies, user agents, or browser fingerprints.
+- Do not rotate cookies, proxies, or browser fingerprints, and do not rotate the User-Agent per request; refresh it periodically instead (see Request Headers).
 - Do not issue background refreshes or speculative prefetches.
 
 The delay applies to every network request, including each individual image within a multi-image post. With the default random delay and image-heavy posts, a run can take a while; this is by design.
@@ -181,11 +183,14 @@ When a risk signal is detected:
 
 For transient network failures such as timeout, socket reset, or HTTP `5xx`:
 
-- wait a long cooldown before retrying once;
-- default cooldown: `60000` ms;
-- if the retry fails, stop the run;
+- retry with exponential backoff before giving up;
+- before attempt `k` (1-indexed), wait `retry-base-ms * 2^(k-1)` ms with jitter, so the default profile waits ~60s then ~120s;
+- retry at most `--max-retries` times (default `2`);
+- if retries are exhausted, stop the run;
 - record the failure in `manifest.json` if possible;
 - exit with code `2` if partial work completed, otherwise `1`.
+
+Risk signals (HTTP `403`/`418`/`429`, visitor system, login page, captcha) are **not** retried — they stop the run immediately at exit `3` (see Risk Signals).
 
 ## Archive Layout
 
@@ -592,5 +597,7 @@ Revised 2026-06-19 after a design review. Substantive changes:
 - Stated data requirements for `images.json` (URL + byte size) and `metadata.json` (footer fields + availability), leaving exact JSON shapes to implementation.
 - Made SEQ chronological-sorting explicit; specified refresh ordering and atomic manifest writes.
 - Follow-up batch (after live re-verification): image variant order set to `mw2000 -> original -> large -> bmiddle -> thumbnail -> largest` — prefer `mw2000` and fetch `largest` (the only >mw2000 variant) only as a last resort, to cap disk usage; added rules that the cookie is never logged/printed and must be a logged-in (`SUB`/`SUBP`) session; added `mblogid` dedup across pages, an explicit "complete post" definition for resumability, failure-record URL/error sanitization, a corrected dry-run contract (writes nothing), and the exact `created_at` parse regex.
+
+- Made transient retries configurable (`--max-retries`, `--retry-base-ms`) with exponential backoff; the User-Agent is now refreshed periodically rather than frozen forever (still fixed within a run, never rotated per request).
 
 Detailed JSON schemas for `metadata.json`, `images.json`, and the manifest's `crawl runs`/`events`/`failures` are deferred to implementation.
