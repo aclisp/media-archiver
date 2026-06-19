@@ -1,0 +1,15 @@
+# Weibo credentials — never commit (live session cookie)
+WEIBO_COOKIE.txt
+
+# Archive output
+weibo-archive/
+
+# Logs
+*.log
+
+# macOS
+.DS_Store
+
+# Node / Bun dependencies (if added later)
+node_modules/
+.bun/
