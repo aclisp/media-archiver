@@ -45,11 +45,13 @@ Run the user archive script with the cookie in the environment:
 
 ```bash
 WEIBO_COOKIE='PASTE_COOKIE_VALUE_HERE' \
-bun run weibo-archive-user.ts \
+bun run src/weibo-archive-user.ts \
   --uid 1401527553 \
   --from 2026-06-01 \
   --to 2026-06-18
 ```
+
+The cookie must be from a **logged-in** Weibo session (copy it while signed in to `weibo.com`); a visitor/guest cookie will not work. By default the script processes at most `50` posts per run (`--max-posts-per-run`); increase it if your date range contains more.
 
 ## Temporary Local File Option
 
@@ -62,14 +64,20 @@ WEIBO_COOKIE.txt
 Then run a command that reads it into the environment:
 
 ```bash
-WEIBO_COOKIE="$(cat WEIBO_COOKIE.txt)" \
-bun run weibo-archive-user.ts \
+export WEIBO_COOKIE="$(cat WEIBO_COOKIE.txt)"
+bun run src/weibo-archive-user.ts \
   --uid 1401527553 \
   --from 2026-06-01 \
   --to 2026-06-18
 ```
 
-If you use this option, make sure the file is not committed.
+Run this from the repo root so `src/weibo-archive-user.ts` resolves. Put the `export` on its own line: an inline `WEIBO_COOKIE="$(cat ...)"` before the command can place the full cookie value in your shell history and in the process environment (visible to other users on shared systems). Restrict the file and keep it untracked:
+
+```bash
+chmod 600 WEIBO_COOKIE.txt     # readable only by you
+```
+
+Make sure the file is not committed (it is already in `.gitignore`).
 
 Check Git status before committing:
 

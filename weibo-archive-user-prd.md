@@ -44,7 +44,9 @@ Optional options:
 ## Authentication
 
 - Read authentication only from `WEIBO_COOKIE`.
+- The cookie must be from a **logged-in** Weibo session (it must contain `SUB` and `SUBP`); visitor/guest cookies are insufficient for the `/ajax/statuses/mymblog` endpoint.
 - Never write the cookie to disk.
+- Never include the cookie value, or any substring of it, in logs, error messages, debug output, or manifest entries. On an auth failure, print only a generic message (e.g. "Authentication failed; refresh your cookie").
 - If authentication fails, print a short message telling the user to refresh the cookie from Chrome DevTools.
 - Do not auto-load `.env` in v1.
 
@@ -82,7 +84,7 @@ includes posts from `2026-06-01 00:00:00 +0800` through `2026-06-18 23:59:59 +08
 
 ### Parsing `created_at`
 
-Weibo returns `created_at` in a non-standard shape such as `Thu Jun 18 22:14:12 +0800 2026` (year last, after the offset). Do **not** rely on `new Date(created_at)` — Bun runs on JavaScriptCore, whose date parser is stricter than V8's and may return `Invalid Date` for this shape. Parse the string explicitly (e.g. regex-extract the fields and build the instant from the literal `+0800` offset), then format wall-clock values in `Asia/Shanghai` using `Intl.DateTimeFormat` with `timeZone: 'Asia/Shanghai'`. Asia/Shanghai is UTC+8 with no DST, so this is unambiguous.
+Weibo returns `created_at` in a non-standard shape such as `Thu Jun 18 22:14:12 +0800 2026` (year last, after the offset). Do **not** rely on `new Date(created_at)` — Bun runs on JavaScriptCore, whose date parser is stricter than V8's and may return `Invalid Date` for this shape. Parse the string explicitly: match with `/^(\w{3})\s+(\w{3})\s+(\d{1,2})\s+(\d{2}):(\d{2}):(\d{2})\s+([+-]\d{4})\s+(\d{4})$/`, map the English month name to 1–12, and build the UTC instant from the literal `+HHMM` offset (e.g. `+0800`). Then format wall-clock values in `Asia/Shanghai` using `Intl.DateTimeFormat` with `timeZone: 'Asia/Shanghai'`. Asia/Shanghai is UTC+8 with no DST, so this is unambiguous.
 
 ## Data Sources
 
@@ -131,6 +133,8 @@ Stop when either:
 - two consecutive pages where all *original* posts are older than `--from` (reposts on such pages are ignored for the stop decision).
 
 The two-page rule is intentional to avoid missing posts if Weibo injects pinned or irregularly ordered items.
+
+Deduplicate timeline results by `mblogid` before processing: pinned or injected items can repeat across pages, and the same `mblogid` must not be processed twice or compete for a sequence number. Keep the first occurrence.
 
 ### Completeness Limitation
 
@@ -258,7 +262,7 @@ On later runs:
 Default behavior:
 
 - If a matched post already exists in `manifest.json`, skip it.
-- If a post directory exists but is incomplete, complete the missing pieces where possible.
+- If a post directory exists but is incomplete, complete the missing pieces where possible. A post is *complete* when `payload.json`, `metadata.json`, `images.json`, and `post.md` all exist and parse, and every image marked `downloaded` in `images.json` has its file present on disk.
 - Do not redownload images that already exist and match the expected manifest entry.
 - Persist manifest updates after each completed timeline page and each completed post. This is not a separate checkpoint system; it is the mechanism that makes normal resumability safe after interruption. Write `manifest.json` atomically (write to a temp file in the same directory, then rename over the target) so an interruption mid-write cannot corrupt it.
 
@@ -311,12 +315,15 @@ v1 records but does not download:
 For image variant selection, prefer the best available still-image URL, following this order:
 
 ```text
-mw2000 -> largest -> original -> large -> bmiddle -> thumbnail
+largest -> mw2000 -> original -> large -> bmiddle -> thumbnail
 ```
+
+This order is live-verified by actual byte size for `R4JwG0ktx`: `largest` (797 KB) > `mw2000` (432 KB) > `original` (253 KB) > `large` (208 KB) > `bmiddle` (15 KB) > `thumbnail` (5 KB), all HTTP 200 with a `Referer` header. `largecover` duplicates `large` and is excluded.
 
 Notes:
 
 - `images.json` must record, per image: its index, the selected variant, the source URL, the local path, the content type, and the byte size. The size and URL are required for refresh change detection (see Refresh Mode).
+- If a preferred variant key is absent, its URL is null or empty, or the download fails, fall through to the next variant in the order. If every variant fails, record the image as failed in `images.json`.
 - `metadata.json` must carry the fields shown in the Markdown footer (source, region, repost/comment/like counts at archive time) plus `availability` and `lastCheckedAt`.
 - Posts with no images (e.g. text-only or video posts) produce no `images/` directory and no image lines in `post.md`.
 - GIFs and livephotos may not expose `mw2000` or `largest`; variant selection falls through to `large`/`original` and is best-effort.
@@ -369,6 +376,8 @@ Markdown rules:
 - place images immediately after text in original order;
 - include metadata in a compact footer.
 
+The title uses the user's `screen_name` (from the profile/detail payload) and the post's local timestamp, e.g. `# <screen_name> - <YYYY-MM-DD HH:MM>`.
+
 ## Manifest
 
 Maintain:
@@ -416,6 +425,8 @@ Record failures in `manifest.json` with:
 - error message;
 - timestamp.
 
+Sanitize recorded URLs (strip session-bearing query parameters beyond `id`/`uid`/`page`) and truncate error messages so session data or response bodies never enter `manifest.json` (which is not gitignored).
+
 Exit codes:
 
 - `0`: all matched posts succeeded (also for a `--dry-run` that completed without failures).
@@ -440,7 +451,7 @@ For partial image failures:
 - not download media;
 - not write post directories.
 
-It may update nothing on disk, or at most write no files at all in v1.
+`--dry-run` must not create or modify any files on disk; it only prints matched post URLs and timestamps to stdout. It still authenticates with your cookie for timeline paging, so it is not anonymous.
 
 ## Review Checklist
 
@@ -548,6 +559,8 @@ Observed response:
 
 This validates the image variant preference order and direct image download approach.
 
+A later byte-size probe for `R4JwG0ktx` ranked variants `largest` (797 KB) > `mw2000` (432 KB) > `original` (253 KB) > `large` (208 KB), all HTTP 200 with a `Referer` header, which moved `largest` ahead of `mw2000` in the preference order.
+
 ### Date Window and Directory Naming Simulation
 
 A live simulation for original posts in the inclusive Asia/Shanghai window `2026-06-18` through `2026-06-19` found 6 matching original posts.
@@ -570,7 +583,7 @@ This validates that `SEQ` is per day and that the hour component remains useful 
 Revised 2026-06-19 after a design review. Substantive changes:
 
 - Split exit codes: risk signals now exit `3`, distinct from setup errors at exit `1` and partial-work stops at exit `2`, so unattended tooling can tell a flagged session from a config error. Added the JSON-level risk signals (negative `ok` / rate-limit message) and a definition of "partial work".
-- The script now lives under `src/` so `biome`, `tsconfig`, and the `@/*` alias cover it. Note: the invocation path in `weibo-cookie-tutorial.md` still reads `weibo-archive-user.ts` and should be updated to `src/weibo-archive-user.ts` to match.
+- The script now lives under `src/` so `biome`, `tsconfig`, and the `@/*` alias cover it; the tutorial's invocation path was updated to `src/weibo-archive-user.ts` to match.
 - Added a `.gitignore` requirement covering `WEIBO_COOKIE.txt`, `weibo-archive/`, and logs.
 - Added explicit `created_at` parsing guidance (do not rely on `new Date()`; verify under Bun/JavaScriptCore).
 - Added required request headers, including `Referer: https://weibo.com/` for image downloads.
@@ -578,5 +591,6 @@ Revised 2026-06-19 after a design review. Substantive changes:
 - Stated the long-text fallback endpoint for posts whose inline content is truncated.
 - Stated data requirements for `images.json` (URL + byte size) and `metadata.json` (footer fields + availability), leaving exact JSON shapes to implementation.
 - Made SEQ chronological-sorting explicit; specified refresh ordering and atomic manifest writes.
+- Follow-up batch (after live re-verification): reordered image variants to `largest -> mw2000 -> original -> large -> bmiddle -> thumbnail` after a live byte-size comparison (was `mw2000` first); added rules that the cookie is never logged/printed and must be a logged-in (`SUB`/`SUBP`) session; added `mblogid` dedup across pages, an explicit "complete post" definition for resumability, failure-record URL/error sanitization, a corrected dry-run contract (writes nothing), and the exact `created_at` parse regex.
 
 Detailed JSON schemas for `metadata.json`, `images.json`, and the manifest's `crawl runs`/`events`/`failures` are deferred to implementation.

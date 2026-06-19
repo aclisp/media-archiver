@@ -7,6 +7,11 @@ weibo-archive/
 # Logs
 *.log
 
+# Environment files (defense-in-depth; .env not auto-loaded in v1)
+.env
+.env.*
+!.env.example
+
 # macOS
 .DS_Store
 
