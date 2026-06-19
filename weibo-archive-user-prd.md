@@ -64,6 +64,22 @@ weibo-archive/
 
 The `WEIBO_COOKIE.txt` file (if used as a local convenience, see `weibo-cookie-tutorial.md`) is a live session credential and must stay untracked.
 
+## Automation and Bounded Local State
+
+This tool is expected to be invoked repeatedly by agents and automations. The first priority for persisted tool metadata is to avoid unbounded growth from repeated invocations.
+
+Rules:
+
+- Keep `manifest.json` as a compact current-state index, not a permanent audit log.
+- Do not keep aggregate counters such as `totalRuns`, and do not write detailed per-run audit history in v1.
+- Bound invocation-derived manifest diagnostics:
+  - keep at most the latest `20` crawl runs;
+  - keep at most the latest `100` manifest events;
+  - keep at most the latest `100` failures.
+- It is acceptable for `manifest.posts`, post directories, and archived media files to grow with newly discovered unique archive content; that is archive content, not invocation metadata.
+- Remove stale manifest temp files left by interrupted atomic writes on a later startup.
+- Do not delete already downloaded media during refresh, even if a later `images.json` no longer references an older local file. Refresh is rare, and older downloaded media can still be valuable.
+
 ## Date Range Semantics
 
 Dates are interpreted as Asia/Shanghai calendar days.
@@ -270,6 +286,7 @@ Default behavior:
 - If a post directory exists but is incomplete, complete the missing pieces where possible. A post is *complete* when `payload.json`, `metadata.json`, `images.json`, and `post.md` all exist and parse, and every image marked `downloaded` in `images.json` has its file present on disk.
 - Do not redownload images that already exist and match the expected manifest entry.
 - Persist manifest updates after each completed timeline page and each completed post. This is not a separate checkpoint system; it is the mechanism that makes normal resumability safe after interruption. Write `manifest.json` atomically (write to a temp file in the same directory, then rename over the target) so an interruption mid-write cannot corrupt it.
+- Later runs should clean up stale manifest temp files from interrupted previous writes.
 
 ## Refresh Mode
 
@@ -281,6 +298,7 @@ With `--refresh`, for all existing posts matched by the requested date range:
 - regenerate `metadata.json`, `images.json`, and `post.md`;
 - update `manifest.json`;
 - preserve the existing `postDir`.
+- preserve already downloaded image files; do not clean older media files from `images/` during refresh.
 
 Refresh applies to all matched existing posts, not a single explicit post ID. When refresh matches more posts than `--max-posts-per-run`, process them in chronological ascending order (oldest first) for determinism across runs.
 
@@ -395,12 +413,12 @@ The manifest should include:
 
 - user ID;
 - archive schema version;
-- crawl runs;
+- recent bounded crawl runs;
 - per-post entries keyed by `mblogid`;
-- failures;
-- events such as refreshes and unavailable detections.
+- recent bounded failures;
+- recent bounded events such as refreshes and unavailable detections.
 
-The exact shapes of `crawl runs`, `failures`, and `events` entries are defined during implementation. The per-post entry shape is fixed below.
+The exact shapes of `crawl runs`, `failures`, and `events` entries are defined during implementation. These arrays are explicitly bounded; they must not grow indefinitely across automation invocations. The per-post entry shape is fixed below.
 
 Suggested post entry:
 

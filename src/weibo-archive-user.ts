@@ -1,4 +1,5 @@
-import { basename, join } from 'node:path';
+import { readdir, unlink } from 'node:fs/promises';
+import { basename, dirname, join } from 'node:path';
 
 const ARCHIVE_SCHEMA_VERSION = 1;
 const DEFAULT_OUT_DIR = 'weibo-archive';
@@ -13,6 +14,9 @@ const ACCEPT_JSON = 'application/json, text/plain, */*';
 const SHANGHAI_OFFSET_MINUTES = 8 * 60;
 const REQUEST_TIMEOUT_MS = 30_000;
 const IMAGE_VARIANTS = ['mw2000', 'original', 'large', 'bmiddle', 'thumbnail', 'largest'] as const;
+const MAX_MANIFEST_RUNS = 20;
+const MAX_MANIFEST_EVENTS = 100;
+const MAX_MANIFEST_FAILURES = 100;
 
 type ImageVariant = (typeof IMAGE_VARIANTS)[number];
 type FailureStage = 'timeline' | 'detail' | 'image' | 'longText' | 'markdown';
@@ -1061,13 +1065,7 @@ async function markUnavailable(archiveRoot: string, entry: ManifestPost, manifes
         const markdown = buildMarkdown(metadata.uid, timelinePost, payload ?? {}, metadata, images, undefined);
         await Bun.write(join(postRoot, 'post.md'), markdown);
     } catch {
-        manifest.failures.push({
-            id: crypto.randomUUID(),
-            timestamp: now,
-            stage: 'markdown',
-            mblogid,
-            message: 'Post unavailable, but existing metadata or markdown could not be updated',
-        });
+        recordFailure(manifest, 'markdown', 'Post unavailable, but existing metadata or markdown could not be updated', undefined, mblogid);
     }
 }
 
@@ -1238,6 +1236,7 @@ function sleep(ms: number): Promise<void> {
 }
 
 async function loadManifest(path: string, uid: string): Promise<Manifest> {
+    await pruneStaleManifestTempFiles(path);
     const file = Bun.file(path);
     if (!(await file.exists())) {
         return { schemaVersion: ARCHIVE_SCHEMA_VERSION, uid, runs: [], posts: {}, failures: [], events: [] };
@@ -1249,16 +1248,50 @@ async function loadManifest(path: string, uid: string): Promise<Manifest> {
     manifest.runs ??= [];
     manifest.failures ??= [];
     manifest.events ??= [];
+    pruneManifestDiagnostics(manifest);
     return manifest;
 }
 
 async function saveManifest(path: string, manifest: Manifest): Promise<void> {
     manifest.updatedAt = nowShanghaiIso();
-    const dir = path.slice(0, path.lastIndexOf('/'));
+    pruneManifestDiagnostics(manifest);
+    const dir = dirname(path);
     await Bun.$`mkdir -p ${dir}`.quiet();
     const tempPath = `${path}.${process.pid}.${Date.now()}.tmp`;
     await Bun.write(tempPath, `${JSON.stringify(manifest, null, 2)}\n`);
     await Bun.$`mv ${tempPath} ${path}`.quiet();
+}
+
+async function pruneStaleManifestTempFiles(path: string): Promise<void> {
+    const dir = dirname(path);
+    const manifestFile = basename(path);
+    let filenames: string[];
+    try {
+        filenames = await readdir(dir);
+    } catch {
+        return;
+    }
+
+    for (const filename of filenames) {
+        if (!filename.startsWith(`${manifestFile}.`) || !filename.endsWith('.tmp')) {
+            continue;
+        }
+        try {
+            await unlink(join(dir, filename));
+        } catch {
+            // Best-effort cleanup only; an old temp file should not block a run.
+        }
+    }
+}
+
+function pruneManifestDiagnostics(manifest: Manifest): void {
+    manifest.runs = keepLast(manifest.runs, MAX_MANIFEST_RUNS);
+    manifest.events = keepLast(manifest.events, MAX_MANIFEST_EVENTS);
+    manifest.failures = keepLast(manifest.failures, MAX_MANIFEST_FAILURES);
+}
+
+function keepLast<T>(items: T[], limit: number): T[] {
+    return items.length > limit ? items.slice(items.length - limit) : items;
 }
 
 async function writeJson(path: string, value: unknown): Promise<void> {
