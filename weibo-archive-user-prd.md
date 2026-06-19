@@ -312,13 +312,13 @@ v1 records but does not download:
 - external link/card pages;
 - other embedded media not represented in `pic_infos`.
 
-For image variant selection, prefer the best available still-image URL, following this order:
+For image variant selection, prefer `mw2000` first (good quality at a moderate byte cost). Only fetch a variant **larger** than `mw2000` (i.e. `largest`) when it is the *only* available source — bigger-than-`mw2000` images are otherwise skipped to save disk space. The preference order is:
 
 ```text
-largest -> mw2000 -> original -> large -> bmiddle -> thumbnail
+mw2000 -> original -> large -> bmiddle -> thumbnail -> largest
 ```
 
-This order is live-verified by actual byte size for `R4JwG0ktx`: `largest` (797 KB) > `mw2000` (432 KB) > `original` (253 KB) > `large` (208 KB) > `bmiddle` (15 KB) > `thumbnail` (5 KB), all HTTP 200 with a `Referer` header. `largecover` duplicates `large` and is excluded.
+Live byte sizes for `R4JwG0ktx`: `mw2000` (432 KB), `original` (253 KB), `large` (208 KB), `bmiddle` (15 KB), `thumbnail` (5 KB), and `largest` (797 KB — last resort only). All returned HTTP 200 with a `Referer` header. `largecover` duplicates `large` and is excluded.
 
 Notes:
 
@@ -559,7 +559,7 @@ Observed response:
 
 This validates the image variant preference order and direct image download approach.
 
-A later byte-size probe for `R4JwG0ktx` ranked variants `largest` (797 KB) > `mw2000` (432 KB) > `original` (253 KB) > `large` (208 KB), all HTTP 200 with a `Referer` header, which moved `largest` ahead of `mw2000` in the preference order.
+A byte-size probe for `R4JwG0ktx` measured `largest` (797 KB), `mw2000` (432 KB), `original` (253 KB), `large` (208 KB), `bmiddle` (15 KB), `thumbnail` (5 KB), all HTTP 200 with a `Referer` header. `mw2000` is preferred first; `largest` (the only >mw2000 variant) is fetched only as a last resort to cap disk usage.
 
 ### Date Window and Directory Naming Simulation
 
@@ -591,6 +591,6 @@ Revised 2026-06-19 after a design review. Substantive changes:
 - Stated the long-text fallback endpoint for posts whose inline content is truncated.
 - Stated data requirements for `images.json` (URL + byte size) and `metadata.json` (footer fields + availability), leaving exact JSON shapes to implementation.
 - Made SEQ chronological-sorting explicit; specified refresh ordering and atomic manifest writes.
-- Follow-up batch (after live re-verification): reordered image variants to `largest -> mw2000 -> original -> large -> bmiddle -> thumbnail` after a live byte-size comparison (was `mw2000` first); added rules that the cookie is never logged/printed and must be a logged-in (`SUB`/`SUBP`) session; added `mblogid` dedup across pages, an explicit "complete post" definition for resumability, failure-record URL/error sanitization, a corrected dry-run contract (writes nothing), and the exact `created_at` parse regex.
+- Follow-up batch (after live re-verification): image variant order set to `mw2000 -> original -> large -> bmiddle -> thumbnail -> largest` — prefer `mw2000` and fetch `largest` (the only >mw2000 variant) only as a last resort, to cap disk usage; added rules that the cookie is never logged/printed and must be a logged-in (`SUB`/`SUBP`) session; added `mblogid` dedup across pages, an explicit "complete post" definition for resumability, failure-record URL/error sanitization, a corrected dry-run contract (writes nothing), and the exact `created_at` parse regex.
 
 Detailed JSON schemas for `metadata.json`, `images.json`, and the manifest's `crawl runs`/`events`/`failures` are deferred to implementation.
